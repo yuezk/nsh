@@ -16,7 +16,7 @@
 //! a scroll of the gallery's Lists (a shadow on every card) was composited
 //! at ~60 of 120 Hz with them. Inset shadows are clipped by their holder's
 //! rounded bounds for the same reason, masked only for differing corners.
-//! In-process renderings (`shot`) do not show unmasked outer shadows.
+//! In-process renderings (`shot`) do not draw shadow-path-only outer shadows.
 
 use std::cell::Cell;
 
@@ -658,11 +658,15 @@ impl Visual {
             .fold(0.0, f32::max) as CGFloat;
         let around = grow(local, reach);
         holder.setFrame(local);
+        // Effect layers are not NSView-backed: inherit the backing scale explicitly.
+        let scale = layer.contentsScale();
+        holder.setContentsScale(scale);
         if covered {
             // SAFETY: clearing the mask.
             unsafe { holder.setMask(None) };
         } else {
             let mask = mask_layer(holder);
+            mask.setContentsScale(scale);
             let path = CGMutablePath::new();
             // SAFETY: valid mutable paths, a null transform.
             unsafe {
@@ -680,18 +684,17 @@ impl Visual {
             mask.setPath(Some(&path));
         }
         resize(casters, shadows.len(), holder, CAShapeLayer::new);
-        // The box, which the mask hides.
-        let content = rounded(local, radii);
         // CSS order is top first; later sublayers draw on top.
         for (l, s) in casters.iter().zip(shadows.iter().rev()) {
+            l.setContentsScale(scale);
             let shape = grow(local, s.spread.0 as CGFloat);
             l.setFrame(local);
             let path = rounded(shape, grown(radii, s.spread));
-            cast(l, &path, &content, s, s.offset_x.0, s.offset_y.0);
-            if covered {
-                // Nothing to hide the stand-in content: the shadow only.
-                l.setFillColor(None);
-            }
+            // An opaque stand-in leaks through the antialiased exclusion mask.
+            // Core Animation casts shadowPath without any visible content.
+            l.setPath(None);
+            l.setFillColor(None);
+            cast(l, &path, s, s.offset_x.0, s.offset_y.0);
         }
     }
 
@@ -766,7 +769,12 @@ impl Visual {
             }
             add_reversed(&path, hole, grown(inner_radii, -s.spread));
             l.setFrame(local);
-            cast(l, &path, &content, s, 0.0, 0.0);
+            // Keep the inset snapshot carrier outside the padding-box clip.
+            l.setPath(Some(&content));
+            // SAFETY: an immutable Core Animation constant.
+            l.setFillRule(unsafe { kCAFillRuleEvenOdd });
+            l.setFillColor(cg_color(Color(s.color.0 | 0xff)).as_deref());
+            cast(l, &path, s, 0.0, 0.0);
         }
     }
 
@@ -1048,22 +1056,8 @@ fn new_backdrop(
 
 /// Makes `l` cast `s`'s shadow of `path`, moved by `(x, y)`.
 ///
-/// Core Animation needs no content for a shadow path, but in-process
-/// renderings (`renderInContext:`) ignore the path and shadow the content
-/// (and skip layers without any): `l` draws `content` (even-odd), which its
-/// holder's mask hides, so those show a shadow of about the right shape.
-fn cast(
-    l: &CAShapeLayer,
-    path: &CGMutablePath,
-    content: &CGMutablePath,
-    s: &BoxShadow,
-    x: f32,
-    y: f32,
-) {
-    l.setPath(Some(content));
-    // SAFETY: an immutable Core Animation constant.
-    l.setFillRule(unsafe { kCAFillRuleEvenOdd });
-    l.setFillColor(cg_color(Color(s.color.0 | 0xff)).as_deref());
+/// The shadow path is independent of any visible content on `l`.
+fn cast(l: &CALayer, path: &CGMutablePath, s: &BoxShadow, x: f32, y: f32) {
     l.setShadowPath(Some(path));
     l.setShadowColor(cg_color(Color(s.color.0 | 0xff)).as_deref());
     l.setShadowOpacity((s.color.0 & 0xff) as f32 / 255.0);
@@ -1380,5 +1374,41 @@ mod tests {
             backdrop_kind(&tinted, 0.0, false, true),
             Some(BackdropKind::Glass)
         );
+    }
+    #[test]
+    fn outer_shadow_layers_match_the_backing_scale_without_changing_blur() {
+        let layer = CALayer::new();
+        let mut visual = Visual::default();
+        let ring = BoxShadow {
+            spread: px(2.0),
+            color: Color(0x0a84ffff),
+            ..BoxShadow::default()
+        };
+        let shadow = BoxShadow {
+            offset_y: px(10.0),
+            blur: px(15.0),
+            spread: px(-3.0),
+            color: Color(0x0000001a),
+            ..BoxShadow::default()
+        };
+        for scale in [2.0, 1.0] {
+            layer.setContentsScale(scale);
+            visual.set_shadows(
+                &layer,
+                &[&ring, &shadow],
+                CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(120.0, 24.0)),
+                CornerRadii::default(),
+                false,
+            );
+            let (holder, casters) = visual.shadows.as_ref().unwrap();
+            assert_eq!(holder.contentsScale(), scale);
+            assert_eq!(holder.mask().unwrap().contentsScale(), scale);
+            for caster in casters {
+                assert_eq!(caster.contentsScale(), scale);
+            }
+            // CSS order is reversed in Core Animation's layer stack.
+            assert_eq!(casters[0].shadowRadius(), 7.5);
+            assert_eq!(casters[1].shadowRadius(), 0.0);
+        }
     }
 }

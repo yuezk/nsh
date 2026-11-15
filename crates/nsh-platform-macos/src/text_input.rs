@@ -1,7 +1,7 @@
 //! Text inputs: an `NSTextField` (single line; `NSSecureTextField` for
 //! `secureTextEntry`) or an `NSTextView` in an `NSScrollView`
-//! (`multiline`) at the content box the core laid out (inside padding and
-//! border), in a view that fills the input's ([`InputPad`]): a click
+//! (`multiline`) inside the border, with padding applied to its text rather
+//! than its scrollbars, in a view that fills the input's ([`InputPad`]): a click
 //! anywhere in the input, its padding too, edits at the nearest point.
 //!
 //! The view draws the decoration (background, border, corners) from the
@@ -48,7 +48,8 @@
 //! is reported before the composition ends.
 //!
 //! Focus follows desktop habits: Tab moves between fields (the window
-//! recalculates its key view loop), Escape leaves the field, and clicking
+//! recalculates its key view loop), Escape leaves the field and passes
+//! cancellation up the responder chain, and clicking
 //! a field places the caret there; `focus()` puts the caret at the end
 //! rather than selecting everything as AppKit does.
 //!
@@ -73,6 +74,7 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
+    NSAccessibility,
     NSApplication, NSBorderType, NSColor, NSControl, NSControlTextEditingDelegate, NSDragOperation,
     NSDraggingInfo, NSEvent, NSEventModifierFlags, NSEventType, NSFocusRingType,
     NSFontAttributeName, NSForegroundColorAttributeName, NSLineBreakMode, NSMutableParagraphStyle,
@@ -248,7 +250,12 @@ impl Editor {
                 }
                 None => field.setStringValue(&text),
             },
-            Editor::Area { view, .. } => view.setString(&text),
+            Editor::Area { view, .. } => {
+                view.setString(&text);
+                if view.isHorizontallyResizable() {
+                    view.sizeToFit();
+                }
+            }
         }
     }
 
@@ -302,8 +309,9 @@ pub(crate) struct InputState {
     delegate: Retained<InputDelegate>,
     /// Fills the view and holds the editor ([`InputPad`]).
     pad: Retained<NSView>,
-    /// A text view's placeholder, under it while its text is empty.
+    /// The placeholder, under the editor while its text is empty.
     placeholder: Retained<NSTextField>,
+    text_origin: Cell<Point<Points>>,
     config: RefCell<InputConfig>,
     /// A configuration was applied (auto focus happens on the first).
     configured: Cell<bool>,
@@ -780,10 +788,14 @@ impl Ctx {
             return true;
         }
         if command == sel!(cancelOperation:) {
-            // Escape leaves the field (navigation leaves Escape alone while
-            // a field has the focus).
             self.key_press("Escape");
             self.unfocus();
+            if let Some(surface) = self.surface.upgrade() {
+                // Keep cancellation on AppKit's responder chain, so the host
+                // can dismiss a panel even while its field editor had focus.
+                // SAFETY: cancelOperation: takes an optional sender.
+                unsafe { surface.root.ns().tryToPerform_with(command, None) };
+            }
             return true;
         }
         // A tab character only goes into a multiline input, with
@@ -1197,6 +1209,17 @@ define_text_view!(
     unsafe impl NSObjectProtocol for TextArea {}
 
     impl TextArea {
+        #[unsafe(method(textContainerOrigin))]
+        fn text_container_origin(&self) -> NSPoint {
+            if let Some(input) = self.ivars().get().and_then(|cx| cx.input.upgrade()) {
+                let origin = input.text_origin.get();
+                NSPoint::new(origin.x.0 as CGFloat, origin.y.0 as CGFloat)
+            } else {
+                // SAFETY: NSTextView's own method, during initialization before its input exists.
+                unsafe { msg_send![super(self), textContainerOrigin] }
+            }
+        }
+
         /// A click in an inactive window edits at once, as everywhere in
         /// the surface (the root accepts first clicks too).
         #[unsafe(method(acceptsFirstMouse:))]
@@ -1823,9 +1846,7 @@ impl InputState {
 
     fn update_placeholder(&self) {
         let editor = self.editor.borrow();
-        let shown = matches!(&*editor, Editor::Area { .. })
-            && !self.config.borrow().placeholder.is_empty()
-            && editor.is_empty();
+        let shown = !self.config.borrow().placeholder.is_empty() && editor.is_empty();
         self.placeholder.setHidden(!shown);
     }
 
@@ -1918,7 +1939,10 @@ pub(crate) fn create(surface: &Rc<Surface>, view: &NshView) {
         let placeholder = NSTextField::labelWithString(&NSString::new(), mtm);
         placeholder.setHidden(true);
         placeholder.setSelectable(false);
+        placeholder.setAccessibilityElement(false);
         if let Some(cell) = placeholder.cell() {
+            // AppKit exposes a label's cell even when the field is ignored.
+            cell.setAccessibilityElement(false);
             cell.setWraps(true);
             cell.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
         }
@@ -1928,6 +1952,7 @@ pub(crate) fn create(surface: &Rc<Surface>, view: &NshView) {
             delegate,
             pad: InputPad::create(mtm),
             placeholder,
+            text_origin: Cell::new(Point::default()),
             config: RefCell::new(InputConfig::default()),
             configured: Cell::new(false),
             content: Cell::new(None),
@@ -2143,7 +2168,15 @@ pub(crate) fn config(surface: &Rc<Surface>, view: &NshView, config: &InputConfig
             field.setAlignment(align);
             field.setBaseWritingDirection(direction);
             field.setEditable(config.editable);
-            field.setPlaceholderAttributedString(Some(&placeholder(config, &font, align)));
+            // AppKit draws a field's placeholder differently while its field
+            // editor is active. Keep one label beneath both native states.
+            let label = &input.placeholder;
+            label.setBaseWritingDirection(direction);
+            label.setAttributedStringValue(&placeholder(config, &font, align));
+            if let Some(cell) = label.cell() {
+                cell.setWraps(false);
+                cell.setLineBreakMode(NSLineBreakMode::ByClipping);
+            }
             if let Some(editor) = field.currentEditor() {
                 editor.setFont(Some(&font));
                 editor.setTextColor(Some(&color));
@@ -2158,6 +2191,7 @@ pub(crate) fn config(surface: &Rc<Surface>, view: &NshView, config: &InputConfig
             // A built-in bar of the app's takes the indicator's place; the
             // text still scrolls with the wheel, the keys and the caret.
             scroller.setHasVerticalScroller(config.scrollbar_visible);
+            configure_wrapping(text, scroller, config.soft_wrap);
             text.setFont(Some(&font));
             text.setTextColor(Some(&color));
             text.setAlignment(align);
@@ -2185,13 +2219,20 @@ pub(crate) fn config(surface: &Rc<Surface>, view: &NshView, config: &InputConfig
             // The space above the first line and below the last.
             text.setTextContainerInset(CGSize::new(0.0, line.inset));
             let label = &input.placeholder;
-            label.setFont(Some(&font));
+            label.setFont(Some(&placeholder_font(config, &font)));
             label.setTextColor(Some(&placeholder_color(config)));
             label.setAlignment(align);
             label.setBaseWritingDirection(direction);
             label.setStringValue(&NSString::from_str(&config.placeholder));
+            if let Some(cell) = label.cell() {
+                cell.setWraps(true);
+                cell.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
+            }
         }
     }
+    editor
+        .responder()
+        .setAccessibilityPlaceholderValue(Some(&NSString::from_str(&config.placeholder)));
     *input.config.borrow_mut() = config.clone();
     if editor.focused() {
         input.style_editor();
@@ -2369,18 +2410,36 @@ fn placeholder_color(config: &InputConfig) -> Retained<NSColor> {
     ns_color(config.placeholder_color.unwrap_or(c.with_alpha(0.5)))
 }
 
-/// A field's placeholder, in the field's font.
+fn placeholder_font(
+    config: &InputConfig,
+    fallback: &objc2_app_kit::NSFont,
+) -> Retained<objc2_app_kit::NSFont> {
+    match config.placeholder_font_family {
+        Some(family) => {
+            let mut style = config.style;
+            style.font_family = Some(family);
+            crate::text::ns_font(&style)
+        }
+        None => Retained::from(fallback),
+    }
+}
+
+/// A field's placeholder, using its configured font family.
 fn placeholder(
     config: &InputConfig,
     font: &objc2_app_kit::NSFont,
     align: NSTextAlignment,
 ) -> Retained<NSAttributedString> {
+    let font = placeholder_font(config, font);
     let color = placeholder_color(config);
     // AppKit's single-line field editor uses the font's natural line
     // height. A fixed paragraph height here would move only the
     // placeholder's baseline, away from the text and caret.
     let paragraph = NSMutableParagraphStyle::new();
     paragraph.setAlignment(align);
+    // The focused field editor honors paragraph wrapping independently
+    // of the single-line cell. Keep long placeholders on the visible line.
+    paragraph.setLineBreakMode(NSLineBreakMode::ByClipping);
     // SAFETY: immutable AppKit attribute keys with values of their
     // documented types (NSFont, NSColor, NSParagraphStyle).
     let keys = unsafe {
@@ -2588,6 +2647,7 @@ fn place(view: &NshView, input: &InputState) {
         // they were added.
         window.setAutorecalculatesKeyViewLoop(true);
     }
+    let borders = view.state().style.borders.widths;
     let editor = input.editor.borrow();
     match &*editor {
         Editor::Line { field, .. } => {
@@ -2608,6 +2668,7 @@ fn place(view: &NshView, input: &InputState) {
                     height: Points(height),
                 },
             };
+            host(&input.placeholder, rect);
             host(field, rect);
         }
         Editor::Area { scroller, view, .. } => {
@@ -2623,11 +2684,23 @@ fn place(view: &NshView, input: &InputState) {
                 ),
             };
             host(&input.placeholder, label);
-            let before = scroller.frame().size;
-            host(scroller, content);
-            if scroller.frame().size != before && editor.focused() {
-                reveal_caret_later(view);
+            let viewport = Bounds {
+                origin: Point::new(borders.left, borders.top),
+                size: Size::new(
+                    bounds.size.width - borders.left - borders.right,
+                    bounds.size.height - borders.top - borders.bottom,
+                ),
+            };
+            let text_content = input.content.get().unwrap_or(viewport);
+            let (origin, inset) = multiline_text_insets(viewport, text_content);
+            input.text_origin.set(origin);
+            // AppKit uses twice the inset to size the text container/document;
+            // the overridden origin preserves unequal leading/trailing padding.
+            if view.textContainerInset() != inset {
+                view.setTextContainerInset(inset);
             }
+            host(scroller, viewport);
+            configure_wrapping(view, scroller, input.config.borrow().soft_wrap);
         }
     }
 }
@@ -2980,6 +3053,49 @@ fn place_pad(
     }
 }
 
+/// Keep code/XML lines intact while letting the document grow horizontally.
+fn configure_wrapping(text: &NSTextView, scroller: &NSScrollView, soft_wrap: bool) {
+    let viewport = scroller.contentSize();
+    scroller.setHasHorizontalScroller(!soft_wrap);
+    text.setHorizontallyResizable(!soft_wrap);
+    text.setAutoresizingMask(if soft_wrap {
+        objc2_app_kit::NSAutoresizingMaskOptions::ViewWidthSizable
+    } else {
+        objc2_app_kit::NSAutoresizingMaskOptions::empty()
+    });
+    text.setMinSize(viewport);
+    // SAFETY: this text view owns the container created by its initializer.
+    if let Some(container) = unsafe { text.textContainer() } {
+        container.setWidthTracksTextView(soft_wrap);
+        container.setContainerSize(CGSize::new(
+            if soft_wrap {
+                (viewport.width - 2.0 * text.textContainerInset().width).max(0.0)
+            } else {
+                CGFloat::MAX
+            },
+            CGFloat::MAX,
+        ));
+    }
+    if soft_wrap {
+        let height = text.frame().size.height.max(viewport.height);
+        text.setFrameSize(CGSize::new(viewport.width, height));
+    } else {
+        text.sizeToFit();
+    }
+}
+
+fn multiline_text_insets(
+    viewport: Bounds<Points>,
+    content: Bounds<Points>,
+) -> (Point<Points>, CGSize) {
+    let origin = content.origin - viewport.origin;
+    let inset = CGSize::new(
+        ((viewport.size.width - content.size.width).0 / 2.0) as CGFloat,
+        ((viewport.size.height - content.size.height).0 / 2.0) as CGFloat,
+    );
+    (origin, inset)
+}
+
 /// How far a borderless field's cell insets its text horizontally.
 const FIELD_PADDING: f32 = 2.0;
 
@@ -3199,6 +3315,29 @@ fn clip_utf16(s: &str, max: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn multiline_padding_keeps_scrollbars_at_the_border_and_text_at_its_content_origin() {
+        let viewport = Bounds {
+            origin: Point::new(px(1.0), px(1.0)),
+            size: Size::new(px(398.0), px(198.0)),
+        };
+        let content = Bounds {
+            origin: Point::new(px(13.0), px(9.0)),
+            size: Size::new(px(366.0), px(176.0)),
+        };
+        let (origin, inset) = multiline_text_insets(viewport, content);
+        assert_eq!(origin, Point::new(px(12.0), px(8.0)));
+        assert_eq!(inset, CGSize::new(16.0, 11.0));
+        assert_eq!(
+            viewport.size.width.0 as CGFloat - 2.0 * inset.width,
+            content.size.width.0 as CGFloat
+        );
+        assert_eq!(
+            viewport.size.height.0 as CGFloat - 2.0 * inset.height,
+            content.size.height.0 as CGFloat
+        );
+    }
 
     #[test]
     fn single_line_placeholder_matches_native_editor_metrics() {

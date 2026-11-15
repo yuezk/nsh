@@ -169,6 +169,8 @@ pub struct AppOptions {
     /// their calls and posts ([`AppView::host`]). One for every app the view
     /// loads; a new one by default.
     pub host: nsh_engine::HostChannel,
+    /// Typed application state shared with this view’s Rust components.
+    pub context: nsh_core::element::EngineContext,
     /// The URL schemes that open the app (nsh.json `schemes`), for
     /// [`run_app`]: it registers them with the desktop, runs one instance
     /// and hands each URL to the app (`UrlScheme.on("open", ...)`). An app
@@ -214,6 +216,7 @@ impl Default for AppOptions {
             notifications: false,
             login_item: false,
             host: nsh_engine::HostChannel::default(),
+            context: Default::default(),
             schemes: Vec::new(),
             single_instance: false,
             file_types: Vec::new(),
@@ -374,7 +377,7 @@ impl AppView {
             cache: options.cache.clone(),
             storage: options.storage.clone(),
             clock: Default::default(),
-            context: Default::default(),
+            context: options.context.clone(),
             pinned: Default::default(),
             clipboard: None,
             host: options.host.clone(),

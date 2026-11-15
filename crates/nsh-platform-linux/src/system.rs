@@ -29,7 +29,7 @@
 //!   hour cycle (`org.gnome.desktop.interface`'s `clock-format`, where the
 //!   schema is installed), live; the time zone, below;
 //! - the font scale: `gtk-xft-dpi` over 96 dpi;
-//! - reduce motion: `gtk-enable-animations` off;
+//! - animations are enabled by default, independent of system settings;
 //! - the pixel ratio: the root's surface scale (fractional scales too);
 //! - right to left: GTK's default text direction (the locale's);
 //! - the screen reader: the AT-SPI bus's `ScreenReaderEnabled`;
@@ -147,7 +147,6 @@ button.nsh-dialog-button.destructive:hover { background-color: #dc2626; }
 struct Appearance {
     dark: bool,
     font_scale: f32,
-    reduce_motion: bool,
     rtl: bool,
     screen_reader: bool,
 }
@@ -288,7 +287,6 @@ fn install() {
         });
     SYSTEM.with(|s| s.borrow_mut().initial_dark = initial_dark);
     settings.connect_gtk_xft_dpi_notify(|_| system_changed());
-    settings.connect_gtk_enable_animations_notify(|_| system_changed());
     watch_portal();
     watch_screen_reader();
     watch_time_zone();
@@ -317,9 +315,6 @@ fn appearance() -> Appearance {
         font_scale: settings
             .as_ref()
             .map_or(1.0, |s| font_scale(s.gtk_xft_dpi())),
-        reduce_motion: settings
-            .as_ref()
-            .is_some_and(|s| !s.is_gtk_enable_animations()),
         rtl: gtk::Widget::default_direction() == gtk::TextDirection::Rtl,
         screen_reader,
     }
@@ -413,7 +408,7 @@ fn update(surface: &Surface, appearance: Appearance) {
     env.locale = LOCALE.with(|l| *l);
     env.locale_settings = locale_settings();
     env.font_scale = appearance.font_scale;
-    env.reduce_motion = appearance.reduce_motion;
+    env.reduce_motion = false;
     env.rtl = appearance.rtl;
     env.screen_reader = appearance.screen_reader;
     env.pixel_ratio = pixel_ratio(&surface.root);

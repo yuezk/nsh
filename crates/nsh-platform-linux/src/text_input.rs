@@ -1,6 +1,7 @@
 //! Text inputs: a `gtk::Text` (single line) or a `gtk::TextView` in a
 //! `gtk::ScrolledWindow` (`multiline`), hosted in the input's view at the
-//! content box the core laid out (inside padding and border).
+//! content box for single lines; multiline scroll viewports follow the border
+//! with padding applied to the text inside them.
 //!
 //! The view draws the decoration (background, border, corners) from the
 //! core's style like any other view, so the editors draw only text: a
@@ -988,7 +989,19 @@ pub(crate) fn config(_surface: &Rc<Surface>, view: &NshView, config: &InputConfi
             } else {
                 gtk::PolicyType::External
             };
-            scroller.set_policy(gtk::PolicyType::Never, bar);
+            view.set_wrap_mode(if config.soft_wrap {
+                gtk::WrapMode::WordChar
+            } else {
+                gtk::WrapMode::None
+            });
+            scroller.set_policy(
+                if config.soft_wrap {
+                    gtk::PolicyType::Never
+                } else {
+                    gtk::PolicyType::Automatic
+                },
+                bar,
+            );
             view.set_editable(config.editable);
             view.set_cursor_visible(config.editable && !config.caret_hidden);
             view.set_justification(match config.align {
@@ -1133,6 +1146,17 @@ fn place(view: &NshView, input: &InputState) {
             scroller,
             view: text,
         } => {
+            let viewport = {
+                let state = view.state();
+                let borders = state.style.borders.widths;
+                Bounds {
+                    origin: Point::new(borders.left, borders.top),
+                    size: Size::new(
+                        state.frame.size.width - borders.left - borders.right,
+                        state.frame.size.height - borders.top - borders.bottom,
+                    ),
+                }
+            };
             // GTK's text view leaves its adjustment as it is while it
             // animates a scroll to the caret, and a new line starts one
             // just before the core grows the box for it: the scroll would
@@ -1140,7 +1164,7 @@ fn place(view: &NshView, input: &InputState) {
             // Ending it lets the allocation coming for the new height set
             // the adjustment up again (and back to the top if everything
             // fits).
-            if scroller.height() as f32 != content.size.height.0
+            if scroller.height() as f32 != viewport.size.height.0
                 && let Some(adjustment) = text.vadjustment()
             {
                 adjustment.set_value(adjustment.value());
@@ -1167,7 +1191,40 @@ fn place(view: &NshView, input: &InputState) {
                 config.caret_hidden && config.style.color.0 & 0xff == 0
             };
             scroller.set_can_target(!invisible);
-            let content = if invisible {
+            // Keep scrollbars beside the border. Text margins preserve all
+            // four padding edges without shrinking the scrolling viewport.
+            let margin = |value: f32| value.max(0.0).round() as i32;
+            text.set_left_margin(if invisible {
+                0
+            } else {
+                margin((content.origin.x - viewport.origin.x).0)
+            });
+            text.set_top_margin(if invisible {
+                0
+            } else {
+                margin((content.origin.y - viewport.origin.y).0)
+            });
+            text.set_right_margin(if invisible {
+                0
+            } else {
+                margin(
+                    (viewport.origin.x + viewport.size.width
+                        - content.origin.x
+                        - content.size.width)
+                        .0,
+                )
+            });
+            text.set_bottom_margin(if invisible {
+                0
+            } else {
+                margin(
+                    (viewport.origin.y + viewport.size.height
+                        - content.origin.y
+                        - content.size.height)
+                        .0,
+                )
+            });
+            let host = if invisible {
                 let line = text.create_pango_layout(Some("Ag")).pixel_size().1
                     + text.pixels_above_lines()
                     + text.pixels_below_lines();
@@ -1180,9 +1237,9 @@ fn place(view: &NshView, input: &InputState) {
                     ..content
                 }
             } else {
-                content
+                viewport
             };
-            view.set_native(scroller, content);
+            view.set_native(scroller, host);
         }
     }
 }
@@ -1448,6 +1505,12 @@ fn css(config: &InputConfig) -> String {
     let placeholder = config
         .placeholder_color
         .map_or_else(|| format!("alpha({color}, 0.5)"), css_color);
+    let placeholder_font = config
+        .placeholder_font_family
+        .map_or_else(String::new, |family| {
+            let families = css_families(&family.name()).unwrap_or_else(|| "sans-serif".into());
+            format!("font-family: {families};")
+        });
     let mut css = format!(
         "text, textview, textview > text, scrolledwindow, label.nsh-placeholder {{ \
          background: none; border: none; box-shadow: none; outline: none; padding: 0; \

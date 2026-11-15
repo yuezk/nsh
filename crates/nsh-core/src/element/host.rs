@@ -397,6 +397,9 @@ pub fn svg(src: impl IntoReactive<super::ImageSrc>) -> Svg {
     #[cfg(all(feature = "svg", not(target_arch = "wasm32")))]
     {
         let mut node = ElNode::new(Tag::Canvas);
+        // A fitted SVG's intrinsic drawing must not enlarge a scrollable ancestor.
+        node.style
+            .value(crate::StyleKey::Overflow, crate::PropertyValue::Bool(true));
         let shown = svg_drawing(src);
         node.bind_attr(
             move || shown.get(),
@@ -707,6 +710,13 @@ impl Input {
         })
     }
 
+    /// The placeholder font family; uses the input font when unset.
+    pub fn placeholder_font_family(self, family: impl IntoReactive<String>) -> Self {
+        self.bind_prop(family, |family: String| {
+            Prop::PlaceholderFontFamily(Some(crate::FontFamily::new(family.trim())))
+        })
+    }
+
     /// The selection highlight's color (on iOS also the caret's, unless
     /// [`Self::caret_color`] is set: UIKit tints both with one).
     pub fn selection_color(self, color: impl IntoReactive<Hsla>) -> Self {
@@ -768,6 +778,12 @@ impl Input {
     /// platform's indicator, or the app's built-in bar once it set one.
     pub fn scrollbar(self, shows: impl IntoReactive<bool>) -> Self {
         self.bind_prop(shows, |shows: bool| Prop::Scrollbar(shows.into()))
+    }
+
+    /// Wraps long lines in a multiline input (default true).
+    /// Disable it for code or XML editors with horizontal scrolling.
+    pub fn soft_wrap(self, wrap: impl IntoReactive<bool>) -> Self {
+        self.bind_prop(wrap, Prop::SoftWrap)
     }
 
     /// At most `length` characters.

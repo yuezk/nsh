@@ -137,6 +137,7 @@ impl<M: TextEngine> Core<M> {
         let Some(el) = source(&BuiltInScrollbar {
             target,
             horizontal,
+            multiline_input: input,
             theme: own.clone(),
             app_theme: self.builtin_scrollbars.as_ref().map(|b| b.1.clone()),
         }) else {

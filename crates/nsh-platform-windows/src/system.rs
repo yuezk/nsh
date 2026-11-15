@@ -32,8 +32,7 @@
 //!   unit setting: the region's; the time zone, below;
 //! - the font scale: Settings > Accessibility > Text size
 //!   (`TextScaleFactor`, 100 to 225 percent);
-//! - reduce motion: Settings > Accessibility > Visual effects > Animation
-//!   effects off (`SPI_GETCLIENTAREAANIMATION`);
+//! - animations are enabled by default, independent of system settings;
 //! - right to left: the reading direction of the UI language (what the
 //!   shell's own layout follows);
 //! - the screen reader: `SPI_GETSCREENREADER` (Narrator, NVDA and JAWS set
@@ -123,7 +122,7 @@ use windows::{
             Shell::{SetCurrentProcessExplicitAppUserModelID, ShellExecuteW},
             WindowsAndMessaging::{
                 GA_ROOT, GetAncestor, GetForegroundWindow, GetWindowThreadProcessId, IsIconic,
-                IsWindowVisible, PostMessageW, SPI_GETCLIENTAREAANIMATION, SPI_GETSCREENREADER,
+                IsWindowVisible, PostMessageW, SPI_GETSCREENREADER,
                 SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_ACTION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
                 SystemParametersInfoW, WM_CLOSE,
             },
@@ -176,7 +175,6 @@ thread_local! {
 struct Settings {
     dark: bool,
     font_scale: f32,
-    reduce_motion: bool,
     rtl: bool,
     screen_reader: bool,
     locale: Locale,
@@ -288,7 +286,6 @@ fn settings() -> Settings {
             w!("TextScaleFactor"),
         )),
         // Animation effects off is Windows' reduce motion.
-        reduce_motion: spi_bool(SPI_GETCLIENTAREAANIMATION) == Some(false),
         rtl: ui_language_rtl(),
         screen_reader: spi_bool(SPI_GETSCREENREADER) == Some(true),
         locale,
@@ -451,7 +448,7 @@ fn update(surface: &Surface, settings: Settings) {
     env.locale_settings = settings.locale_settings;
     env.locale_settings.time_zone = time_zone();
     env.font_scale = settings.font_scale;
-    env.reduce_motion = settings.reduce_motion;
+    env.reduce_motion = false;
     env.rtl = settings.rtl;
     env.screen_reader = settings.screen_reader;
     if !surface.hwnd().is_invalid() {

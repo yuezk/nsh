@@ -776,52 +776,73 @@ pub(crate) fn built_in(of: &BuiltInScrollbar) -> Option<AnyElement> {
         },
         None => of.app_theme.clone()?.take::<ScrollbarTheme>()?,
     };
-    theme.look(of.horizontal)?;
+    if of.multiline_input {
+        if theme.vertical.is_none() && theme.horizontal.is_none() {
+            return None;
+        }
+    } else {
+        theme.look(of.horizontal)?;
+    }
     Some(
-        view_scrollbar()
+        view_scrollbars()
             .target(ScrollbarTarget::Node(NodeRef(of.target)))
             .horizontal(of.horizontal)
+            .multiline_input(of.multiline_input)
             .theme(theme)
             .into_element(),
     )
 }
 
-/// The props of [`ViewScrollbar`].
+/// The props of [`ViewScrollbars`].
 #[derive(Debug, Clone, PartialEq, Props)]
-struct ViewScrollbarProps {
+struct ViewScrollbarsProps {
     /// The view it is the bar of.
     #[prop(default)]
     target: ScrollbarTarget,
     /// Whether that view scrolls sideways.
     #[prop(default)]
     horizontal: bool,
+    /// Multiline text can scroll on both axes.
+    #[prop(default)]
+    multiline_input: bool,
     /// What it is drawn with.
     #[prop(default)]
     theme: ScrollbarTheme,
 }
 
-/// A view's built-in bar: as large as the view's viewport (the core lays
-/// it out there), the pointer going through to the view but where the
-/// bar takes it.
+/// A view's built-in bars, laid out over its viewport. Multiline inputs
+/// may have both axes; other views retain their configured scroll axis.
 #[component]
-fn ViewScrollbar(props: ViewScrollbarProps) -> impl IntoElement {
+fn ViewScrollbars(props: ViewScrollbarsProps) -> impl IntoElement {
     let theme = props.theme;
-    let look = theme.look(props.horizontal).cloned().unwrap_or_default();
-    let bar = Scrollbar::element(ScrollbarProps {
-        scroll: Prop::from(props.target),
-        axis: Prop::from(if props.horizontal {
-            Axis::Horizontal
-        } else {
-            Axis::Vertical
-        }),
-        mode: Prop::from(theme.mode),
-        motion: Prop::from(theme.motion),
-        min_thumb_length: Prop::from(theme.min_thumb_length),
-        thumb_class: Prop::from(look.thumb_class),
-        thumb_style: Prop::from(look.thumb_style),
-        accessibility_label: Prop::from(look.accessibility_label),
-    })
-    .app_class(look.class)
-    .inline_style(look.style);
-    view().pointer_events(PointerEvents::BoxNone).child(bar)
+    let axes = if props.multiline_input {
+        &[false, true][..]
+    } else {
+        std::slice::from_ref(&props.horizontal)
+    };
+    let bars = axes
+        .iter()
+        .filter_map(|&horizontal| {
+            let look = theme.look(horizontal)?.clone();
+            Some(
+                Scrollbar::element(ScrollbarProps {
+                    scroll: Prop::from(props.target),
+                    axis: Prop::from(if horizontal {
+                        Axis::Horizontal
+                    } else {
+                        Axis::Vertical
+                    }),
+                    mode: Prop::from(theme.mode),
+                    motion: Prop::from(theme.motion),
+                    min_thumb_length: Prop::from(theme.min_thumb_length),
+                    thumb_class: Prop::from(look.thumb_class),
+                    thumb_style: Prop::from(look.thumb_style),
+                    accessibility_label: Prop::from(look.accessibility_label),
+                })
+                .app_class(look.class)
+                .inline_style(look.style),
+            )
+        })
+        .collect::<Vec<_>>();
+    view().pointer_events(PointerEvents::BoxNone).children(bars)
 }

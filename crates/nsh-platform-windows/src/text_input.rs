@@ -221,7 +221,7 @@ pub(crate) struct InputState {
     /// The scroll of several lines as last reported to a built-in bar
     /// (`InputConfig::replaced`): offset, text height, width, viewport
     /// height. `None` until reported (again).
-    reported_scroll: Cell<Option<(f32, f32, f32, f32)>>,
+    reported_scroll: Cell<Option<(f32, f32, f32, f32, f32, f32)>>,
     /// A press is selecting.
     dragging: Cell<bool>,
     /// The text's format (the placeholder's and the line's height), made
@@ -453,6 +453,17 @@ impl InputState {
             (text, dwrite_align(&c), c.multiline)
         };
         let layout = self.make_layout(&text, align, multiline)?;
+        if let Some(family) = self.config.borrow().placeholder_font_family {
+            unsafe {
+                let _ = layout.SetFontFamilyName(
+                    &HSTRING::from(family.name().as_ref()),
+                    windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_RANGE {
+                        startPosition: 0,
+                        length: text.len() as u32,
+                    },
+                );
+            }
+        }
         if !multiline {
             let width = self.size.get().0.max(1.0);
             // SAFETY: COM calls on the new layout.
@@ -610,7 +621,11 @@ impl InputState {
                 p.bits = bits;
                 p.max_length = config.max_length.unwrap_or(i32::MAX as u32);
                 p.scroll = if config.multiline {
-                    ES_AUTOVSCROLL
+                    if config.soft_wrap {
+                        ES_AUTOVSCROLL
+                    } else {
+                        ES_AUTOVSCROLL | ES_AUTOHSCROLL
+                    }
                 } else {
                     ES_AUTOHSCROLL
                 };
@@ -641,10 +656,9 @@ impl InputState {
         self.update_client();
     }
 
-    /// Reports how far several lines scrolled, the text's height and the
-    /// viewport's to the built-in bar that takes the place of an
-    /// indicator (`InputConfig::replaced`), when any of them changed since
-    /// last reported.
+    /// Reports both scroll offsets, content size and viewport size to the
+    /// built-in bars replacing native indicators (`InputConfig::replaced`),
+    /// when any of them changed since last reported.
     fn report_scroll(&self) {
         {
             let config = self.config.borrow();
@@ -660,7 +674,16 @@ impl InputState {
         let s = self.scale.get().max(0.01);
         let (min, max, pos, _) = e.vscroll();
         let content = ((max - min) as f32 / s).max(h);
-        let now = (pos as f32 / s, content, w, h);
+        let (xmin, xmax, xpos, _) = e.hscroll();
+        let content_width = ((xmax - xmin) as f32 / s).max(w);
+        let now = (
+            pos as f32 / s,
+            content,
+            w,
+            h,
+            xpos as f32 / s,
+            content_width,
+        );
         if self.reported_scroll.replace(Some(now)) == Some(now) {
             return;
         }
@@ -670,8 +693,8 @@ impl InputState {
         surface.control(|c| {
             c.input_scroll(
                 self.id,
-                Point::new(Points::ZERO, Points(now.0)),
-                Size::new(Points(w), Points(content)),
+                Point::new(Points(now.4), Points(now.0)),
+                Size::new(Points(content_width), Points(content)),
                 Size::new(Points(w), Points(h)),
             );
         });
@@ -841,7 +864,10 @@ fn base_bits(config: &InputConfig) -> u32 {
     let mut bits =
         TXTBIT_D2DDWRITE | TXTBIT_AUTOWORDSEL | TXTBIT_DISABLEDRAG | TXTBIT_HIDESELECTION;
     if config.multiline {
-        bits |= TXTBIT_MULTILINE | TXTBIT_WORDWRAP;
+        bits |= TXTBIT_MULTILINE;
+        if config.soft_wrap {
+            bits |= TXTBIT_WORDWRAP;
+        }
     }
     if !config.editable {
         bits |= TXTBIT_READONLY;
@@ -1367,7 +1393,10 @@ pub(crate) fn config(surface: &Rc<Surface>, view: &NshView, config: &InputConfig
     let (font_changed, editable_changed) = {
         let old = input.config.borrow();
         (
-            old.style != config.style || old.multiline != config.multiline,
+            old.style != config.style
+                || old.multiline != config.multiline
+                || old.soft_wrap != config.soft_wrap
+                || old.placeholder_font_family != config.placeholder_font_family,
             old.editable != config.editable || old.secure != config.secure,
         )
     };
@@ -1700,7 +1729,9 @@ pub(crate) fn wheel(view: &NshView, dy: f32) -> bool {
     if y == before {
         return false;
     }
-    let mut at = windows::Win32::Foundation::POINT { x: 0, y };
+    let mut at = windows::Win32::Foundation::POINT::default();
+    input.send(EM_GETSCROLLPOS, 0, &mut at as *mut _ as isize);
+    at.y = y;
     input.send(EM_SETSCROLLPOS, 0, &mut at as *mut _ as isize);
     view.changed();
     input.report_scroll();
@@ -1733,9 +1764,9 @@ pub(crate) fn can_wheel(view: &NshView, dy: f32) -> bool {
         .is_some_and(|(at, max)| if dy > 0.0 { at < max } else { at > 0 })
 }
 
-/// `Command::ScrollTo` for a multiline input: scrolls its text to `y`,
-/// clamped to the lines that do not fit (a built-in bar's drags).
-pub(crate) fn scroll_to(view: &NshView, y: Points) {
+/// `Command::ScrollTo` for a multiline input: scrolls its text on both
+/// axes, clamped by RichEdit to the content (the built-in bars' drags).
+pub(crate) fn scroll_to(view: &NshView, x: Points, y: Points) {
     let Some(input) = input_of(view) else {
         return;
     };
@@ -1744,7 +1775,7 @@ pub(crate) fn scroll_to(view: &NshView, y: Points) {
     }
     let s = input.scale.get().max(0.01);
     let mut at = windows::Win32::Foundation::POINT {
-        x: 0,
+        x: (x.0 * s).round().max(0.0) as i32,
         y: (y.0 * s).round().max(0.0) as i32,
     };
     input.send(EM_SETSCROLLPOS, 0, &mut at as *mut _ as isize);

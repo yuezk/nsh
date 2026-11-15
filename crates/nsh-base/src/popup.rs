@@ -468,8 +468,8 @@ pub(crate) fn bottom_panel_max_height() -> Length {
 }
 
 /// How long a sheet takes to come in and to go, in milliseconds.
-const SHEET_IN_MS: f32 = 280.0;
-const SHEET_OUT_MS: f32 = 200.0;
+const SHEET_IN_MS: f32 = 200.0;
+const SHEET_OUT_MS: f32 = 140.0;
 
 /// How a sheet comes and goes (`Sheet`, and menus presented as sheets): its
 /// backdrop fades while its panel slides in from its edge, and out again
@@ -650,8 +650,9 @@ impl SheetMotion {
             self.settled.set(true);
             return;
         }
-        self.drag_y.timing(0.0, SHEET_IN_MS, Easing::EaseOut);
-        let end = self.fade.timing(1.0, SHEET_IN_MS, Easing::EaseOut);
+        let easing = Easing::Bezier(0.16, 1.0, 0.3, 1.0);
+        self.drag_y.timing(0.0, SHEET_IN_MS, easing);
+        let end = self.fade.timing(1.0, SHEET_IN_MS, easing);
         let (settled, closing) = (self.settled, self.closing);
         // There when the motion ends, or after its time (as it goes).
         spawn(async move {

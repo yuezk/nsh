@@ -173,8 +173,9 @@ pub(super) struct Instance {
     /// that shows another row sets it instead of being built again.
     row_index: Option<crate::element::Signal<usize>>,
     /// Lazy children a view passes: whether it places them, which what
-    /// passes them reads.
-    lazy_wanted: Option<crate::element::Signal<bool>>,
+    /// passes them reads. The component owns this bridge until it is
+    /// released, including queued placement after its producing region reruns.
+    lazy_wanted: Option<(crate::element::Owner, crate::element::Signal<bool>)>,
     /// In a view: the owner where it places its JS children (a region's),
     /// which the components JS made among them are under.
     children_owner: Option<crate::element::Owner>,
@@ -3032,8 +3033,8 @@ impl<M: TextEngine> Core<M> {
                 // submenu ending their exits at once). Nothing reads its
                 // signal then.
                 Some(_) => {
-                    if let Some(signal) = inst.lazy_wanted {
-                        signal.try_set(wanted);
+                    if let Some((_, signal)) = inst.lazy_wanted {
+                        signal.set(wanted);
                     }
                 }
                 None => self.events.push(JsEvent::Children { host, wanted }),
@@ -3042,23 +3043,16 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// The signal of whether the component hosted by `nested` places its
-    /// lazy children, made under the current owner (the view passing them)
-    /// the first time.
+    /// lazy children. Its root lives with the instance, since the producing
+    /// region can dispose its run before queued placement is applied.
     fn children_wanted_signal(&mut self, nested: NodeId) -> crate::element::Signal<bool> {
         let Some(inst) = self.components.instances.get_mut(&nested) else {
             return crate::element::signal(false);
         };
-        // Made again under this owner when the one that made it is gone
-        // (the run that passed them before was disposed while the
-        // component stayed).
-        match inst.lazy_wanted {
-            Some(signal) if signal.is_live() => signal,
-            _ => {
-                let signal = crate::element::signal(inst.children_wanted);
-                inst.lazy_wanted = Some(signal);
-                signal
-            }
-        }
+        let (_, signal) = inst.lazy_wanted.get_or_insert_with(|| {
+            crate::element::create_root(|| crate::element::signal(inst.children_wanted))
+        });
+        *signal
     }
 
     /// JS child `child`, placed at `place`, leaves the tree (and the
@@ -5101,6 +5095,9 @@ impl<M: TextEngine> Core<M> {
             self.apply_actions();
         }
         self.release_regions(host);
+        if let Some((owner, _)) = inst.lazy_wanted.take() {
+            owner.dispose();
+        }
         self.components.runtime.forget_host(host);
         if let Some(owner) = inst.cell_owner.take() {
             owner.dispose();

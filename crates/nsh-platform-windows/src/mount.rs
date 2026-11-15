@@ -472,8 +472,8 @@ impl Mounter {
             Command::InsertText(_) => {
                 log::warn!("insertText is not supported on Windows yet; nothing inserted")
             }
-            Command::ScrollTo { y, .. } if view.is_some_and(|v| v.kind() == ViewKind::Input) => {
-                crate::text_input::scroll_to(view.expect("an input"), *y);
+            Command::ScrollTo { x, y, .. } if view.is_some_and(|v| v.kind() == ViewKind::Input) => {
+                crate::text_input::scroll_to(view.expect("an input"), *x, *y);
             }
             Command::ScrollTo { .. }
             | Command::ScrollToEnd { .. }

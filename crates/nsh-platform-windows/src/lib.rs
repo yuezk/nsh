@@ -93,3 +93,29 @@ pub use crate::{
     native::{ComponentContext, ComponentFactory, Components, NativeComponent, Wheel},
     text::DWriteTextEngine,
 };
+
+static UI_THREAD: std::sync::OnceLock<crate::window::UiThread> = std::sync::OnceLock::new();
+
+/// Initialize Win32/OLE on the GUI thread before creating embedded app views.
+pub fn initialize(app_id: &str) {
+    unsafe {
+        let _ = windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
+            windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        );
+        let _ = windows::Win32::System::Ole::OleInitialize(None);
+    }
+    crate::system::set_app_id(app_id);
+    let _ = UI_THREAD.set(crate::window::UiThread::current());
+}
+
+/// Run the owning GUI thread's Win32 message loop.
+pub fn run_message_loop() -> i32 {
+    crate::window::run_loop()
+}
+
+/// Schedule application work on the owning GUI thread.
+pub fn dispatch(action: impl FnOnce() + Send + 'static) {
+    if let Some(thread) = UI_THREAD.get() {
+        thread.invoke(action);
+    }
+}

@@ -32,7 +32,8 @@ use std::{
 };
 
 use nsh_core::{
-    AccessibilityState, Checked, ContextMenuEvent, PointerType, TouchEvent, TouchPhase,
+    AccessibilityState, Checked, ContextMenuEvent, EventKind, EventPayload, PointerType,
+    TouchEvent, TouchPhase,
     element::{OrderWatch, Style, watch_order},
     geometry::Axis,
     keymap::When,
@@ -1351,6 +1352,8 @@ fn items_scroll(items: &Items, level: u32, children: Prop<Children>) -> AnyEleme
 /// The parts and placement both kinds of menus take.
 #[derive(Clone, Copy)]
 struct Surface {
+    custom_keyboard: bool,
+    restore_focus: Prop<bool>,
     placement: Prop<Placement>,
     align: Prop<Align>,
     offset: Prop<Points>,
@@ -1427,7 +1430,7 @@ fn surface(
     let items = Items::new(keyed);
     // A popup opened with no item focused (by the pointer) takes the
     // arrows, Home and End as well.
-    if !sheet {
+    if !sheet && !parts.custom_keyboard {
         items.bind_entry_keys(move || presence.mounted() && open.get());
     }
     let (asks, regain) = (Asks::new(), signal(None::<(u32, usize)>));
@@ -1504,7 +1507,7 @@ fn surface(
         presence.focus_back_on_close(
             move || open.get(),
             move || {
-                if closed_by.get() != Some(OpenChangeReason::PressOutside) {
+                if parts.restore_focus.get_untracked() && closed_by.get() != Some(OpenChangeReason::PressOutside) {
                     anchor.focus_back(presence.popup());
                 }
             },
@@ -1623,6 +1626,14 @@ fn surface(
 /// The props of [`Menu`].
 #[derive(Debug, Clone, PartialEq, Props)]
 pub struct MenuProps {
+    /// Restore focus to the trigger when focus is still inside the closing menu.
+    #[prop(default = true)]
+    pub restore_focus: Prop<bool>,
+    /// What screen readers call the trigger.
+    pub accessibility_label: Prop<Option<SharedString>>,
+    /// The trigger takes no pointer or keyboard input.
+    #[prop(default)]
+    pub disabled: Prop<bool>,
     /// Open (controlled): the app owns the value and changes it in
     /// `onOpenChange`. Without it the menu keeps its own state.
     pub open: Prop<Option<bool>>,
@@ -1674,6 +1685,9 @@ pub struct MenuProps {
     pub backdrop_style: Prop<Style>,
     /// What opens it when pressed.
     pub trigger: Prop<Option<Slot>>,
+    /// The app handles keyboard navigation and receives printable text keys (set on creation).
+    #[prop(default)]
+    pub custom_keyboard: Prop<bool>,
     /// The items (`MenuItem`, `MenuSeparator`, `Submenu`, anything else),
     /// made on each opening.
     #[prop(lazy)]
@@ -1683,6 +1697,14 @@ pub struct MenuProps {
 /// The events of a menu.
 #[derive(Debug, Clone, PartialEq, Event)]
 pub enum MenuEvent {
+    /// A press began on the trigger; true for a pointer, false for the keyboard.
+    TriggerPressDown(bool),
+    /// A printable text key addressed to the trigger.
+    TriggerKeyPress(String),
+    /// The trigger gained keyboard focus.
+    TriggerFocus,
+    /// The trigger lost keyboard focus.
+    TriggerBlur,
     /// It opened or closed (by the trigger, a press outside or on the
     /// backdrop, Escape or back, an item chosen), with why: set `open` to
     /// follow it.
@@ -1740,6 +1762,8 @@ pub fn Menu(props: MenuProps, cx: Scope<MenuEvent>) -> impl IntoElement {
     });
     let anchor = element_ref();
     let parts = Surface {
+        custom_keyboard: props.custom_keyboard.get_untracked(),
+        restore_focus: props.restore_focus,
         placement: props.placement,
         align: props.align,
         offset: props.offset,
@@ -1766,7 +1790,7 @@ pub fn Menu(props: MenuProps, cx: Scope<MenuEvent>) -> impl IntoElement {
     {
         let change = change.clone();
         effect(move || {
-            if !focused.get() || open.get() {
+            if props.custom_keyboard.get_untracked() || !focused.get() || open.get() {
                 return;
             }
             let keys = [
@@ -1816,13 +1840,27 @@ pub fn Menu(props: MenuProps, cx: Scope<MenuEvent>) -> impl IntoElement {
             let me = toggle.clone();
             let trigger = trigger
                 .element_ref(&anchor)
+                .role(AccessibilityRole::Button)
+                .optional_label(props.accessibility_label)
+                .disabled(props.disabled)
+                .on(EventKind::PressDown, move |event: &EventPayload| {
+                    cx.emit(MenuEvent::TriggerPressDown(matches!(
+                        event,
+                        EventPayload::Press(_)
+                    )));
+                })
+                .when(props.custom_keyboard.get(), |trigger| {
+                    trigger.on_key_press(move |key: &str| {
+                        cx.emit(MenuEvent::TriggerKeyPress(key.to_owned()))
+                    })
+                })
                 .accessibility_state(move || AccessibilityState {
                     expanded: Some(open.get()),
                     has_popup: true,
                     ..AccessibilityState::default()
                 })
-                .on_focus(move || focused.set(true))
-                .on_blur(move || focused.set(false))
+                .on_focus(move || { focused.set(true); cx.emit(MenuEvent::TriggerFocus); })
+                .on_blur(move || { focused.set(false); cx.emit(MenuEvent::TriggerBlur); })
                 .on_press(move || {
                     keyed.replace(None);
                     toggle(!open.get_untracked(), OpenChangeReason::TriggerPress)
@@ -1949,6 +1987,8 @@ pub fn ContextMenu(props: ContextMenuProps, cx: Scope<MenuEvent>) -> impl IntoEl
         }
     });
     let parts = Surface {
+        custom_keyboard: false,
+        restore_focus: Prop::from(true),
         placement: Prop::from(Placement::Bottom),
         align: Prop::from(Align::Start),
         offset: props.offset,
@@ -2046,6 +2086,12 @@ pub fn ContextMenu(props: ContextMenuProps, cx: Scope<MenuEvent>) -> impl IntoEl
 /// The props of [`MenuItem`].
 #[derive(Debug, Clone, PartialEq, Props)]
 pub struct MenuItemProps {
+    /// The app handles keyboard navigation and receives printable text keys (set on creation).
+    #[prop(default)]
+    pub custom_keyboard: Prop<bool>,
+    /// The current option in a selection menu.
+    #[prop(default)]
+    pub selected: Prop<bool>,
     /// Not chosen: no presses, `disabled:` styles apply, screen readers say
     /// it is dimmed.
     #[prop(default)]
@@ -2091,9 +2137,17 @@ pub struct MenuItemProps {
 /// The events of a [`MenuItem`].
 #[derive(Debug, Clone, PartialEq, Event)]
 pub enum MenuItemEvent {
+    /// A printable text key addressed to the item.
+    KeyPress(String),
     /// It was chosen (a checkable item asks for the other value: the app
     /// sets `checked`).
     Select,
+    /// The item gained keyboard focus.
+    Focus,
+    /// The pointer moved over the item.
+    HoverMove,
+    /// The pointer left the item.
+    HoverOut,
 }
 
 /// An item of a `Menu`, `ContextMenu` or `Submenu`: pressing it chooses it
@@ -2119,13 +2173,13 @@ pub fn MenuItem(props: MenuItemProps, cx: Scope<MenuItemEvent>) -> impl IntoElem
     let focused = signal(false);
     let key = hover.as_ref().map(|m| {
         let key = m.items.add(node, m.level, disabled);
-        m.items.bind_keys(key, focused, m.open);
+        if !props.custom_keyboard.get_untracked() { m.items.bind_keys(key, focused, m.open); }
         key
     });
     // Desktops: the pointer moving over it gives it the keyboard focus.
     let pointer = hover
         .as_ref()
-        .filter(|m| !m.sheet)
+        .filter(|m| !m.sheet && !props.custom_keyboard.get_untracked())
         .map(|m| m.items.clone())
         .zip(key);
     let (moved_over, left) = (pointer.clone(), pointer);
@@ -2221,6 +2275,7 @@ pub fn MenuItem(props: MenuItemProps, cx: Scope<MenuItemEvent>) -> impl IntoElem
             })
         })
         .accessibility_state(move || AccessibilityState {
+            selected: props.selected.get(),
             checked: checked
                 .get()
                 .map(|on| if on { Checked::True } else { Checked::False }),
@@ -2237,6 +2292,7 @@ pub fn MenuItem(props: MenuItemProps, cx: Scope<MenuItemEvent>) -> impl IntoElem
         .optional_label(props.accessibility_label)
         .optional_accessibility_description(props.accessibility_description)
         .on_focus(move || {
+            cx.emit(MenuItemEvent::Focus);
             focused.set(true);
             // The keyboard on another item of its level closes a submenu
             // of the level the pointer opened.
@@ -2255,6 +2311,11 @@ pub fn MenuItem(props: MenuItemProps, cx: Scope<MenuItemEvent>) -> impl IntoElem
                 close_other_submenu(m.this_level(), None, OpenChangeReason::Hover);
             }
         })
+        .when(props.custom_keyboard.get_untracked(), |item| {
+            item.on_key_press(move |key: &str| cx.emit(MenuItemEvent::KeyPress(key.to_owned())))
+        })
+        .on_mouse_move(move |_: &MouseEvent| cx.emit(MenuItemEvent::HoverMove))
+        .on_mouse_leave(move |_: &MouseEvent| cx.emit(MenuItemEvent::HoverOut))
         .when_some(moved_over, |v, (items, key)| {
             v.on_mouse_move(move |_: &MouseEvent| {
                 if !disabled.get_untracked() {
@@ -2269,7 +2330,7 @@ pub fn MenuItem(props: MenuItemProps, cx: Scope<MenuItemEvent>) -> impl IntoElem
             // A Return or Space typed ahead of a key move selects the item
             // the keys move to.
             if let (Some(m), Some(key)) = (&chosen, key)
-                && m.items.press_ahead(key)
+                && !props.custom_keyboard.get_untracked() && m.items.press_ahead(key)
             {
                 return;
             }

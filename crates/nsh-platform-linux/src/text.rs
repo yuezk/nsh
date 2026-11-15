@@ -1195,7 +1195,9 @@ fn main_font(desc: &Arc<str>) -> Option<pango::Font> {
         let fonts = fonts.get_or_insert_with(|| MainFonts {
             context: context(
                 &pangocairo::FontMap::default(),
-                pangocairo::cairo::HintStyle::Slight,
+                // Match layout: hinted ink can exceed GSK's text-node
+                // bounds and be clipped by the Cairo renderer.
+                pangocairo::cairo::HintStyle::None,
             ),
             fonts: FxHashMap::default(),
             files: 0,

@@ -567,6 +567,8 @@ pub struct InputConfig {
     pub placeholder: String,
     /// Placeholder color; the platform's default when `None`.
     pub placeholder_color: Option<Color>,
+    /// Placeholder font family; the input font is used when unset.
+    pub placeholder_font_family: Option<crate::FontFamily>,
     /// Hide the characters (passwords).
     pub secure: bool,
     /// Keyboard layout.
@@ -582,6 +584,8 @@ pub struct InputConfig {
     pub auto_correct: bool,
     /// Several lines (return inserts a line break).
     pub multiline: bool,
+    /// Soft wrapping of multiline input; enabled by default.
+    pub soft_wrap: bool,
     /// Maximum length in UTF-16 units.
     pub max_length: Option<u32>,
     /// The user can edit the text.
@@ -655,6 +659,7 @@ impl Default for InputConfig {
             align: TextAlign::Auto,
             placeholder: String::new(),
             placeholder_color: None,
+            placeholder_font_family: None,
             secure: false,
             keyboard: KeyboardType::Default,
             keyboard_appearance: KeyboardAppearance::Default,
@@ -662,6 +667,7 @@ impl Default for InputConfig {
             auto_capitalize: AutoCapitalize::Sentences,
             auto_correct: true,
             multiline: false,
+            soft_wrap: true,
             max_length: None,
             editable: true,
             blur_on_submit: true,

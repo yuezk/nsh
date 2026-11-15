@@ -398,6 +398,18 @@ impl Editor {
         (min, max, pos, page)
     }
 
+    /// Horizontal scroll range and position, in physical pixels.
+    pub(crate) fn hscroll(&self) -> (i32, i32, i32, i32) {
+        let (mut min, mut max, mut pos, mut page) = (0, 0, 0, 0);
+        let mut enabled = BOOL(0);
+        // SAFETY: local out values.
+        let _ = unsafe {
+            self.services
+                .TxGetHScroll(&mut min, &mut max, &mut pos, &mut page, &mut enabled)
+        };
+        (min, max, pos, page)
+    }
+
     /// The height of the text laid out `width` pixels wide (pixels).
     pub(crate) fn text_height(&self, width: i32) -> Option<i32> {
         use windows::Win32::{

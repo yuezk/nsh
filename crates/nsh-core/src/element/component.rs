@@ -819,15 +819,17 @@ struct ClassType {
     type_name: &'static str,
 }
 
-/// The bar of one scroll view or list that the core asks a UI set to make
+/// The bars of a scroll view, list or multiline input that the core asks a UI set to make
 /// ([`Registry::scrollbars_from`]).
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct BuiltInScrollbar {
-    /// The scroll view or list it scrolls.
+    /// The scroll view, list or multiline input it scrolls.
     pub target: crate::NodeId,
     /// Whether that view scrolls sideways.
     pub horizontal: bool,
+    /// A multiline input, whose text can overflow on both axes.
+    pub multiline_input: bool,
     /// The view's own theme (its `scrollbar` object, as JSON); `None`: the
     /// app's.
     pub theme: Option<Arc<crate::JsonValue>>,

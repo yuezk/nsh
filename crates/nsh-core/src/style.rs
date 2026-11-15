@@ -3497,6 +3497,7 @@ impl Style {
             StyleKey::BorderColor => self.view.borders.colors = [color; 4],
             StyleKey::OutlineColor => self.view.outline.color = color,
             StyleKey::BackgroundColor => self.view.background_color = color,
+            StyleKey::TintColor => self.view.tint_color = Some(color),
             StyleKey::BorderTopColor => self.view.borders.colors[0] = color,
             StyleKey::BorderRightColor => self.view.borders.colors[1] = color,
             StyleKey::BorderBottomColor => self.view.borders.colors[2] = color,

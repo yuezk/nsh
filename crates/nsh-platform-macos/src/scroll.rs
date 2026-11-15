@@ -79,7 +79,7 @@ const WHEEL_SNAP: f32 = 0.6;
 /// Space between the indicator and the ends of the viewport.
 const INDICATOR_MARGIN: f32 = 2.0;
 /// The indicator's thickness.
-const INDICATOR_THICK: f32 = 6.0;
+const INDICATOR_THICK: f32 = 4.0;
 /// How close to its edge (points) a mouse press grabs the indicator,
 /// which is thinner than a pointer is precise...
 const THUMB_GRAB: f32 = 12.0;
@@ -1324,11 +1324,9 @@ fn update_overlays(view: &NshView) {
                 ));
                 layer.setPosition(frame.origin);
                 layer.setCornerRadius(INDICATOR_THICK as f64 / 2.0);
-                let color = if s.live.dark {
-                    CGColor::new_srgb(1.0, 1.0, 1.0, 0.55)
-                } else {
-                    CGColor::new_srgb(0.0, 0.0, 0.0, 0.45)
-                };
+                // Match the desktop's muted-foreground/25 overlay scrollbar.
+                let channel = if s.live.dark { 173.0 / 255.0 } else { 102.0 / 255.0 };
+                let color = CGColor::new_srgb(channel, channel, channel, 0.25);
                 layer.setBackgroundColor(Some(&color));
                 layer.setOpacity(s.live.alpha);
                 layer.setHidden(false);

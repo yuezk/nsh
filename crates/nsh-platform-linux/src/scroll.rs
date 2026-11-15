@@ -410,21 +410,28 @@ pub(crate) fn draw_indicator(snapshot: &gtk::Snapshot, state: &ViewState) {
     if !s.indicator || s.live.alpha <= 0.0 {
         return;
     }
-    let Some((thumb, _)) = s.thumb(size) else {
+    let Some((mut thumb, _)) = s.thumb(size) else {
         return;
     };
+    // Match the desktop CSS width; shared scroll geometry keeps its hit target.
+    const WIDTH: f32 = 4.0;
+    let extra = WIDTH - INDICATOR_THICK.0;
+    if s.horizontal {
+        thumb.origin.y.0 -= extra;
+        thumb.size.height.0 = WIDTH;
+    } else {
+        thumb.origin.x.0 -= extra;
+        thumb.size.width.0 = WIDTH;
+    }
     let rect = graphene::Rect::new(
         thumb.origin.x.0,
         thumb.origin.y.0,
         thumb.size.width.0,
         thumb.size.height.0,
     );
-    let color = if s.live.dark {
-        gdk::RGBA::new(1.0, 1.0, 1.0, 0.55 * s.live.alpha)
-    } else {
-        gdk::RGBA::new(0.0, 0.0, 0.0, 0.45 * s.live.alpha)
-    };
-    snapshot.push_rounded_clip(&crate::view::rounded(rect, [INDICATOR_THICK.0 / 2.0; 4]));
+    let channel = if s.live.dark { 173.0 / 255.0 } else { 102.0 / 255.0 };
+    let color = gdk::RGBA::new(channel, channel, channel, 0.25 * s.live.alpha);
+    snapshot.push_rounded_clip(&crate::view::rounded(rect, [WIDTH / 2.0; 4]));
     snapshot.append_color(&color, &rect);
     snapshot.pop();
 }

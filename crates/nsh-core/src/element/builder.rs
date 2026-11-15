@@ -1,7 +1,7 @@
 //! The elements a view is made of ([`view`], [`text`], [`image`], other
 //! components, slots and children).
 
-use std::{any::Any, fmt, marker::PhantomData, rc::Rc, sync::Arc};
+use std::{any::Any, cell::Cell, fmt, marker::PhantomData, rc::Rc, sync::Arc};
 
 use super::{
     Component, ComponentSpec, Event, IntoReactive, JsValue, PropError, Reactive, SharedString,
@@ -20,13 +20,14 @@ use crate::{
 
 /// A handler of `E` on an element: a closure (`move |e: &E| ..`) that
 /// writes the signals it captured. It runs under the owner current when it
-/// was made (the component, the run of a region or the row whose view made
-/// it), so what it makes (signals, animated values, element refs, tasks) is
-/// that owner's and goes with it; once that owner is disposed it no longer
-/// runs, not even for an event already queued for its node.
+/// was made (the component, region or row whose view made it), so what it
+/// makes (signals, animated values, element refs, tasks) is that owner's
+/// and goes with it. It no longer runs after that render run cleans up or
+/// the owner is disposed.
 pub struct Listener<E: ?Sized> {
     f: Rc<dyn Fn(&E)>,
     owner: super::Owner,
+    active: Rc<Cell<bool>>,
 }
 
 impl<E: ?Sized + 'static> Listener<E> {
@@ -36,15 +37,19 @@ impl<E: ?Sized + 'static> Listener<E> {
     }
 
     fn new(f: Rc<dyn Fn(&E)>) -> Self {
-        Self {
-            f,
-            owner: super::Owner::current_or_detached(),
+        let owner = super::Owner::current_or_detached();
+        // A computation's owner survives reruns; its previous captured state does not.
+        let active = Rc::new(Cell::new(true));
+        if owner != super::Owner::detached() {
+            let active = active.clone();
+            super::cleanup(move || active.set(false));
         }
+        Self { f, owner, active }
     }
 
     /// Whether both listeners belong to the same region run or component.
     pub(crate) fn same_owner(&self, other: &Self) -> bool {
-        self.owner == other.owner
+        self.owner == other.owner && Rc::ptr_eq(&self.active, &other.active)
     }
 
     /// Whether this is the same installed callback (including its owner).
@@ -53,8 +58,11 @@ impl<E: ?Sized + 'static> Listener<E> {
     }
 
     /// Calls it with `event`, under its owner; not once that owner is
-    /// disposed: the view it was made for is gone.
+    /// disposed or its render run was replaced: its captured state is gone.
     pub(crate) fn call(&self, event: &E) {
+        if !self.active.get() {
+            return;
+        }
         if self.owner == super::Owner::detached() {
             (self.f)(event);
         } else if self.owner.is_live() {
@@ -69,6 +77,7 @@ impl<E: ?Sized + 'static> Listener<E> {
         Listener {
             f: Rc::new(move |event: &F| f(&*inner, event)),
             owner: self.owner,
+            active: self.active,
         }
     }
 }
@@ -183,6 +192,7 @@ impl<E: ?Sized> Clone for Listener<E> {
         Self {
             f: self.f.clone(),
             owner: self.owner,
+            active: self.active.clone(),
         }
     }
 }
@@ -1538,6 +1548,27 @@ pub fn __hint_tooltip(node: &mut ElNode, hint: AnyElement) {
 
 /// Elements that take touches.
 pub trait Interactive: Element {
+    /// A printable text key addressed to this focused desktop view.
+    fn on_key_press<M>(self, listener: impl IntoListener<str, M>) -> Self {
+        let listener: Listener<str> = listener.into_listener();
+        let typed = listener.clone();
+        self.on(EventKind::KeyPress, events::typed(typed, events::key))
+            .capture_keys(KeyCapture::keys([crate::keymap::Keystroke { key: crate::keymap::Key::Char(' '), modifiers: Default::default() }]))
+            .on_key_down(move |event: &KeyEvent| {
+                let key: &str = &event.key;
+                let modifiers = event.modifiers;
+                let printable = key.chars().count() == 1 || !key.is_ascii();
+                if !modifiers.ctrl
+                    && !modifiers.cmd
+                    && !modifiers.alt
+                    && printable
+                    && !key.chars().any(char::is_control)
+                {
+                    listener.call(key);
+                }
+            })
+    }
+
     /// A hint about it, shown above it on the desktops while the pointer
     /// rests on it (after half a second), until the pointer leaves or
     /// presses it; never on touch screens, and it never takes the pointer.

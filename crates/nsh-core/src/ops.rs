@@ -3060,6 +3060,9 @@ pub enum Prop {
     /// The placeholder's color (Rust components; TS sets the
     /// `placeholderColor` style key or `placeholder:text-*`).
     PlaceholderColor(Option<Color>),
+    /// Placeholder font family for native Rust input controls.
+    #[prop(reset = Prop::PlaceholderFontFamily(None))]
+    PlaceholderFontFamily(Option<crate::FontFamily>),
     /// `masked`: the text is hidden (passwords).
     #[prop(js = "masked", on = INPUT)]
     Secure(bool),
@@ -3082,6 +3085,9 @@ pub enum Prop {
     /// `multiline`: several lines; return inserts a line break.
     #[prop(js = "multiline", on = INPUT)]
     Multiline(bool),
+    /// Soft wrapping of multiline input (Rust desktop components; default true).
+    #[prop(reset = Prop::SoftWrap(true))]
+    SoftWrap(bool),
     /// `maxLength`: the most characters the user can enter.
     #[prop(js = "maxLength", on = INPUT)]
     MaxLength(Option<u32>),

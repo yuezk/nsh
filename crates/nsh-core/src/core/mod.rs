@@ -3917,8 +3917,9 @@ impl<M: TextEngine> Core<M> {
             } else {
                 shown
             },
+            placeholder,
         );
-        let field = self.input_text(key, FIELD_SAMPLE);
+        let field = self.input_text(key, FIELD_SAMPLE, false);
         let cx = self.text_cx(layout);
         let same = cx.text.layout_eq(&text);
         let same_field = cx.field.as_ref().is_some_and(|f| f.text.layout_eq(&field));
@@ -3946,17 +3947,26 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// `content` in the text style of input `key`, as it is measured.
-    fn input_text(&self, key: Key, content: &str) -> AttributedText {
+    fn input_text(&self, key: Key, content: &str, placeholder: bool) -> AttributedText {
         let node = &self.nodes[key as usize];
         let multiline = node.input.as_ref().is_some_and(|i| i.config.multiline);
         let mut text = AttributedText {
             max_lines: if multiline { 0 } else { 1 },
+            no_wrap: multiline && node.input.as_ref().is_some_and(|i| !i.config.soft_wrap),
             ..AttributedText::default()
         };
-        let style = scaled(
+        let mut style = scaled(
             self.inherited_text_style(key).inherit(&node.text_style),
             node.paragraph.font_multiplier(self.font_scale),
         );
+        if placeholder
+            && let Some(family) = node
+                .input
+                .as_ref()
+                .and_then(|i| i.config.placeholder_font_family)
+        {
+            style.font_family = Some(family);
+        }
         if multiline {
             text.push(&broken_runs(content), style);
         } else {
@@ -6099,9 +6109,17 @@ impl<M: TextEngine> Core<M> {
                         self.scrollbars_pending.push(key);
                         true
                     }
+                    Prop::SoftWrap(wrap) => {
+                        c.soft_wrap = wrap;
+                        true
+                    }
                     Prop::PlaceholderColor(color) => {
                         c.placeholder_color = color;
                         false
+                    }
+                    Prop::PlaceholderFontFamily(family) => {
+                        c.placeholder_font_family = family;
+                        true
                     }
                     Prop::Secure(secure) => {
                         c.secure = secure;
@@ -7477,7 +7495,7 @@ impl<M: TextEngine> Core<M> {
         let (Some(input), Some(layout)) = (node.input.as_ref(), node.layout) else {
             return;
         };
-        let max = input.config.multiline.then_some(width);
+        let max = (input.config.multiline && input.config.soft_wrap).then_some(width);
         let (placeholder, empty_line) = (input.placeholder_measured, input.empty_line);
         let Some(LeafContext::Text(cx)) = self.layout.get_node_context_mut(layout) else {
             return;
@@ -7491,7 +7509,7 @@ impl<M: TextEngine> Core<M> {
         } else {
             // Measured once per placeholder and style.
             let hash = cx.layout_hash;
-            let mut empty = TextContext::new(Arc::new(self.input_text(key, "")));
+            let mut empty = TextContext::new(Arc::new(self.input_text(key, "", false)));
             let size = measure_text(&self.text_engine, &mut self.measure_cache, &mut empty, max);
             let input = self.nodes[key as usize]
                 .input

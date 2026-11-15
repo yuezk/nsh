@@ -406,7 +406,7 @@ fn update(surface: &Surface) {
     env.locale = current_locale();
     env.locale_settings = locale_settings(env.locale);
     env.font_scale = 1.0;
-    env.reduce_motion = workspace.accessibilityDisplayShouldReduceMotion();
+    env.reduce_motion = false;
     env.screen_reader = workspace.isVoiceOverEnabled();
     env.rtl = preferred_language_rtl();
     env.pixel_ratio = pixel_ratio(surface);

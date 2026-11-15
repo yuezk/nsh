@@ -181,6 +181,10 @@ pub struct AppOptions {
     /// which has no Dock icon, shows it itself: from its tray, say). Quit
     /// still stops the app. Only used by [`run_app`]; defaults to false.
     pub keep_alive_on_close: bool,
+    /// The embedding host starts its main window hidden.
+    pub start_hidden: bool,
+    /// The embedding host handles Quit after its own cleanup.
+    pub on_quit: Option<fn()>,
     /// The native components apps can use (`nsh/native`); shared by the
     /// views made with these options. See [`AppView::register_component`].
     pub components: crate::native::Components,
@@ -226,6 +230,8 @@ pub struct AppOptions {
     /// their calls and posts ([`AppView::host`]). One for every app the view
     /// loads; a new one by default.
     pub host: nsh_engine::HostChannel,
+    /// Typed application state shared with this view’s Rust components.
+    pub context: nsh_core::element::EngineContext,
     /// A see-through window: [`run_app`] opens its window nonopaque with a
     /// clear background, and the surface draws no background under the app's
     /// root, so what the app leaves unpainted shows what is behind the
@@ -259,6 +265,8 @@ impl Default for AppOptions {
             background: false,
             activation_policy: ActivationPolicy::Regular,
             keep_alive_on_close: false,
+            start_hidden: false,
+            on_quit: None,
             components: Default::default(),
             appearance: Appearance::System,
             fps: false,
@@ -269,6 +277,7 @@ impl Default for AppOptions {
             notifications: false,
             login_item: false,
             host: nsh_engine::HostChannel::default(),
+            context: Default::default(),
             transparent: false,
         }
     }
@@ -464,7 +473,7 @@ impl AppView {
             cache: options.cache.clone(),
             storage: options.storage.clone(),
             clock: Default::default(),
-            context: Default::default(),
+            context: options.context.clone(),
             pinned: Default::default(),
             clipboard: None,
             host: options.host.clone(),
