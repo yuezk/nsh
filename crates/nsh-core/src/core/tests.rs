@@ -4653,7 +4653,7 @@ fn multiline_inputs_measure_long_runs_in_pieces() {
     .unwrap();
     c.commit();
     let key = c.key(2).unwrap();
-    let measured = |c: &Core<FakeEngine>, content: &str| c.input_text(key, content).text;
+    let measured = |c: &Core<FakeEngine>, content: &str| c.input_text(key, content, false).text;
     // A run without white space as long as minified JSON or Base64 is
     // measured with a line break after every 1024 characters (platform
     // line breakers take quadratic time on one long run)...
