@@ -7673,9 +7673,9 @@ impl<M: TextEngine> Core<M> {
             rtl: node.rtl,
             max_lines,
             ellipsize,
-            // A line clamp already keeps lines from wrapping past it, and
-            // must ellipsize at the box (`truncate`).
-            no_wrap: max_lines == 0 && no_wrap.unwrap_or(false),
+            // A line limit does not override explicit white-space behavior.
+            // `truncate` must use the full line before adding its ellipsis.
+            no_wrap: no_wrap.unwrap_or(false),
             shadow: node.text_style.shadow(),
             selectable,
             selection_color: node
