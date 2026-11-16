@@ -1145,7 +1145,7 @@ impl DWriteTextEngine {
             } else {
                 DWRITE_READING_DIRECTION_LEFT_TO_RIGHT
             });
-            let _ = format.SetWordWrapping(if t.no_wrap {
+            let _ = format.SetWordWrapping(if t.no_wrap || t.max_lines == 1 {
                 DWRITE_WORD_WRAPPING_NO_WRAP
             } else {
                 DWRITE_WORD_WRAPPING_WRAP
@@ -3673,6 +3673,32 @@ mod tests {
         assert!(
             near(broken, drawn) && near(broken, small),
             "{broken} {drawn}"
+        );
+    }
+
+    #[test]
+    fn single_line_hostnames_use_the_available_width_before_the_ellipsis() {
+        let engine = engine();
+        let style = ResolvedTextStyle {
+            font_family: Some(nsh_core::FontFamily::new("Consolas")),
+            ..plain(12.0)
+        };
+        let mut t = text(&[("vpn.ap-southeast.enterprise.example.test", style)]);
+        t.max_lines = 1;
+        t.ellipsize = EllipsizeMode::Tail;
+        let prepared = engine.prepare(&t);
+        let layout = engine.layout(&prepared, Size::new(px(150.0), px(18.0)));
+        let shown = drawn(&t, &layout);
+        assert!(shown.starts_with("vpn.ap-southeast."), "{shown}");
+        let native = layout.downcast::<WinLayout>().unwrap();
+        assert!(
+            native.runs.iter().any(|run| run.sign),
+            "overflow needs an ellipsis"
+        );
+        let line = &engine.lines(&layout)[0];
+        assert!(
+            (120.0..=151.0).contains(&(line.x + line.width).0),
+            "{line:?}"
         );
     }
 

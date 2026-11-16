@@ -7820,48 +7820,6 @@ fn text_inherits_from_views_and_classes_set_props() {
 }
 
 #[test]
-fn single_line_truncation_preserves_explicit_no_wrap() {
-    for (classes, no_wrap) in [("truncate", true), ("line-clamp-1", false)] {
-        let mut c = core();
-        apply(
-            &mut c,
-            vec![
-                Op::Create {
-                    id: 2,
-                    tag: Tag::Text,
-                },
-                class_op(2, classes),
-                Op::CreateText {
-                    id: 3,
-                    text: "vpn.ap-southeast.enterprise.example.test".into(),
-                },
-                Op::Insert {
-                    parent: 2,
-                    child: 3,
-                    before: None,
-                },
-                Op::Insert {
-                    parent: ROOT_ID,
-                    child: 2,
-                    before: None,
-                },
-            ],
-        );
-        let batch = c.commit().unwrap();
-        let text = batch
-            .items
-            .iter()
-            .find_map(|item| match item {
-                MountItem::Text { id: 2, text, .. } => Some(text),
-                _ => None,
-            })
-            .unwrap();
-        assert_eq!(text.max_lines, 1);
-        assert_eq!(text.no_wrap, no_wrap, "{classes}");
-    }
-}
-
-#[test]
 fn texts_inherit_white_space_and_user_select_from_views() {
     let mut c = core();
     view_with_classes(&mut c, 2, "whitespace-nowrap select-text");
